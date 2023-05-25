@@ -1,12 +1,15 @@
 # Write your code here
 import random
+import sqlite3
+import os
 
 
 class CreditCard:
-    def __init__(self, card_number, pin):
+    def __init__(self, card_number, id_db, pin, balance=0):
         self.c_number = card_number
+        self.ident = id_db
         self.sec_pin = pin
-        self.bal = 0
+        self.bal = balance
 
     def get_card_number(self):
         return self.c_number
@@ -17,6 +20,8 @@ class CreditCard:
     def get_balance(self):
         return self.bal
 
+    def get_id_db(self):
+        return self.ident
 
 def print_menu(menu_type="main"):
     if menu_type == "main":
@@ -55,7 +60,7 @@ def card_number_generator(card_num_list: list, num_length=16):
     if card_number in card_num_list:
         return card_number_generator(card_num_list, num_length)
     else:
-        return card_number
+        return str(card_number)
 
 
 def pin_generator(num_length=4):
@@ -65,9 +70,9 @@ def pin_generator(num_length=4):
     return pin
 
 
-def generate_card(card_dict: dict):
+def generate_card(card_dict: dict, _id):
     list_num = [c.get_card_number() for c in card_dict.values()]
-    c = CreditCard(card_number_generator(list_num), pin_generator())
+    c = CreditCard(card_number_generator(list_num), _id, pin_generator())
     n = c.get_card_number()
     return n, c
 
@@ -87,25 +92,69 @@ def logged_in(card):
             exit()
 
 
-cards = {}
+def create_db():
+    con = sqlite3.connect("card.s3db")
+    cursor = con.cursor()
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS card(id INTEGER, number TEXT, pin TEXT, balance INTEGER DEFAULT 0
+            );""")
+    con.commit()
+    cursor.close()
+    con.close()
+
+
+def modify_db(cursor, action, columns=(), values=()):
+    action_dict = {"INSERT": f"INSERT INTO card ({','.join(columns)}) VALUES ({','.join(values)});"}
+    cursor.execute(action_dict[action])
+
+
+def consult_db(cursor, columns):
+    cursor.execute(f"SELECT {columns} FROM card")
+    return cursor.fetchall()
+
+
+# def cleanup():
+#     con = sqlite3.connect("card.s3db")
+#     cursor = con.cursor()
+#     cursor.execute("DROP TABLE IF EXISTS card")
+#     con.commit()
+#     cursor.close()
+#     con.close()
+# cleanup()
+
+create_db()
+conn = sqlite3.connect("card.s3db")
+cur = conn.cursor()
+
 while True:
+    cards = {c[1]: CreditCard(c[1], c[0], c[2], c[3]) for c in consult_db(cur, "*")}
+
+    try:
+        curr_id = max([cards[c].get_id_db() for c in cards.keys()])
+    except TypeError:
+        curr_id = 0
+    except ValueError:
+        curr_id = 0
+
     print_menu()
 
     selection = input()
 
     if selection == "1":
-        genCard = generate_card(cards)
-        cards[genCard[0]] = genCard[1]
+        genCard = generate_card(cards, curr_id + 1)
+        genCard = [str(genCard[1].get_id_db()), genCard[0], genCard[1].get_pin()]
+        modify_db(cur, "INSERT", ["id", "number", "pin"], genCard)
+        conn.commit()
         print("Your card has been created")
         print("Your card number:")
-        print(genCard[0])
+        print(genCard[1])
         print("Your card PIN:")
-        print(genCard[1].get_pin())
+        print(genCard[2])
         print()
 
     elif selection == "2":
         print("Enter your card number:")
-        input_card = int(input())
+        input_card = input()
         print("Enter your PIN:")
         input_pin = input()
 
@@ -117,4 +166,6 @@ while True:
 
     elif selection == "0":
         print("\nBye!")
+        cur.close()
+        conn.close()
         exit()
