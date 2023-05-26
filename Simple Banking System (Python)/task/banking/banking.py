@@ -1,14 +1,17 @@
 # Write your code here
 import random
 import sqlite3
-import os
 
 
 class CreditCard:
     def __init__(self, card_number, id_db, pin, balance=0):
         self.c_number = card_number
         self.ident = id_db
-        self.sec_pin = pin
+        try:
+            self.sec_pin = str(pin)
+        except TypeError:
+            self.sec_pin = pin
+
         self.bal = balance
 
     def get_card_number(self):
@@ -20,17 +23,25 @@ class CreditCard:
     def get_balance(self):
         return self.bal
 
+    def update_balance(self, amount):
+        self.bal += amount
+
     def get_id_db(self):
         return self.ident
+
 
 def print_menu(menu_type="main"):
     if menu_type == "main":
         print("1. Create an account")
         print("2. Log into account")
         print("0. Exit")
+
     if menu_type == "logged":
         print("1. Balance")
-        print("2. Log out")
+        print("2. Add income")
+        print("3. Do transfer")
+        print("4. Close account")
+        print("5. Log out")
         print("0. Exit")
 
 
@@ -44,23 +55,28 @@ def card_number_generator(card_num_list: list, num_length=16):
         new_num = random.randint(0, 9)
         card_number += new_num
 
-        # Checks digit if pair
+    card_number *= 10
+    card_number += luhn_algorithm(card_number)
+
+    if card_number in card_num_list:
+        return card_number_generator(card_num_list, num_length)
+    else:
+        return str(card_number)
+
+
+def luhn_algorithm(number):
+    luhn = 0
+    number = str(number)
+    for n in range(len(str(number))):
+        new_num = int(number[n])
         if (n + 1) % 2 == 0:
             luhn += new_num
         else:
             new_num *= 2
             luhn += new_num if new_num < 10 else new_num - 9
 
-    val_digit = sum([int(n) for n in str(luhn)])
-    val_digit = 10 - (val_digit % 10) if val_digit % 10 != 0 else 0
-
-    card_number *= 10
-    card_number += val_digit
-
-    if card_number in card_num_list:
-        return card_number_generator(card_num_list, num_length)
-    else:
-        return str(card_number)
+    val_digit = 10 - (luhn % 10) if luhn % 10 != 0 else 0
+    return val_digit
 
 
 def pin_generator(num_length=4):
@@ -77,17 +93,69 @@ def generate_card(card_dict: dict, _id):
     return n, c
 
 
-def logged_in(card):
+def logged_in(connection, cursor, card: CreditCard):
     while True:
         print_menu("logged")
         logged_sel = input()
 
         if logged_sel == "1":
             print(f"\nBalance: {card.get_balance()}\n")
+
         elif logged_sel == "2":
+            #FINILIZE
+            print("Enter income:")
+            income = int(input())
+            card.update_balance(income)
+            modify_db(cursor, "UPDATE", ["balance"], [str(card.get_balance())], f"id={card.get_id_db()}")
+            connection.commit()
+            print("Income was added!")
+
+        elif logged_sel == "3":
+            print("Transfer")
+            print("Enter card number:")
+            d_card = input()
+
+            if luhn_algorithm(int(d_card[:-1])) != int(d_card[-1]):
+                print("Probably you made a mistake in the card number. Please try again!")
+                continue
+
+            if card.get_card_number() == d_card:
+                print("You can't transfer money to the same account!")
+                continue
+
+            query = consult_db(cursor, "*", (["number"], [d_card]))
+            if len(query) == 0:
+                print("Such a card does not exist.")
+                continue
+
+            query = query[0]
+            d_card = CreditCard(query[1], query[0], query[2], query[3])
+            print("Enter how much money you want to transfer:")
+            amount = int(input())
+            if amount > card.get_balance():
+                print("Not enough money!")
+                continue
+
+            card.update_balance(-amount)
+            modify_db(cursor, "UPDATE", ["balance"], [str(card.get_balance())], f"id={card.get_id_db()}")
+            d_card.update_balance(amount)
+            modify_db(cursor, "UPDATE", ["balance"], [str(d_card.get_balance())], f"id={d_card.get_id_db()}")
+            connection.commit()
+            print("Success!")
+
+        elif logged_sel == "4":
+            modify_db(cursor, "DELETE", ["id"], [str(card.get_id_db())])
+            connection.commit()
+            print("The account has been closed!")
+            return
+
+        elif logged_sel == "5":
             print("\nYou have successfully logged out!\n")
             return
+
         elif logged_sel == "0":
+            cursor.close()
+            connection.close()
             print("\nBye!")
             exit()
 
@@ -96,23 +164,41 @@ def create_db():
     con = sqlite3.connect("card.s3db")
     cursor = con.cursor()
     cursor.execute("""
-            CREATE TABLE IF NOT EXISTS card(id INTEGER, number TEXT, pin TEXT, balance INTEGER DEFAULT 0
+            CREATE TABLE IF NOT EXISTS card(id INTEGER, 
+            number TEXT, 
+            pin TEXT, 
+            balance INTEGER DEFAULT 0
             );""")
     con.commit()
     cursor.close()
     con.close()
 
 
-def modify_db(cursor, action, columns=(), values=()):
-    action_dict = {"INSERT": f"INSERT INTO card ({','.join(columns)}) VALUES ({','.join(values)});"}
+def db_join_values(c, v):
+    joined = []
+    for i in range(len(c)):
+        joined.append(str(c[i]) + '=' + str(v[i]))
+    return ",".join(joined)
+
+
+def modify_db(cursor, action, columns=[], values=[], cond=None):
+
+    action_dict = {"INSERT": f"INSERT INTO card ({','.join(columns)}) VALUES ({','.join(values)});",
+                   "UPDATE": f"UPDATE card SET {db_join_values(columns, values)} WHERE {cond}",
+                   "DELETE": f"DELETE FROM card WHERE {db_join_values(columns, values)}"}
     cursor.execute(action_dict[action])
 
 
-def consult_db(cursor, columns):
-    cursor.execute(f"SELECT {columns} FROM card")
-    return cursor.fetchall()
+def consult_db(cursor, columns, cond=None):
+    if cond is None:
+        cursor.execute(f"SELECT {columns} FROM card")
+        return cursor.fetchall()
+    else:
+        cursor.execute(f"SELECT {columns} FROM card WHERE {db_join_values(cond[0], cond[1])}")
+        return cursor.fetchall()
 
 
+# ADDED FOR CLEANING UP THE TESTING PROGRAM DATABASE
 # def cleanup():
 #     con = sqlite3.connect("card.s3db")
 #     cursor = con.cursor()
@@ -128,7 +214,8 @@ cur = conn.cursor()
 
 while True:
     cards = {c[1]: CreditCard(c[1], c[0], c[2], c[3]) for c in consult_db(cur, "*")}
-
+    # for key in cards.keys():
+    #     print(key, cards[key].get_pin())
     try:
         curr_id = max([cards[c].get_id_db() for c in cards.keys()])
     except TypeError:
@@ -160,7 +247,7 @@ while True:
 
         if input_card in cards.keys() and cards[input_card].get_pin() == input_pin:
             print("\nYou have successfully logged in!\n")
-            logged_in(cards[input_card])
+            logged_in(conn, cur, cards[input_card])
         else:
             print("\nWrong card number or PIN!\n")
 
